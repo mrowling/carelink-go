@@ -1,8 +1,8 @@
 # CareLink Go
 
 [![CI](https://github.com/mrowling/carelink-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mrowling/carelink-go/actions/workflows/ci.yml)
-[![Docker](https://github.com/mrowling/carelink-go/actions/workflows/docker.yml/badge.svg)](https://github.com/mrowling/carelink-go/actions/workflows/docker.yml)
-[![Release](https://github.com/mrowling/carelink-go/actions/workflows/release.yml/badge.svg)](https://github.com/mrowling/carelink-go/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/mrowling/carelink-go?include_prereleases)](https://github.com/mrowling/carelink-go/releases/latest)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker)](https://github.com/mrowling/carelink-go/pkgs/container/carelink-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mrowling/carelink-go)](https://goreportcard.com/report/github.com/mrowling/carelink-go)
 
 A standalone Go implementation of the CareLink bridge that fetches Medtronic pump and CGM data from the CareLink API and serves it via HTTP endpoints.

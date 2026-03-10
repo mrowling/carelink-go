@@ -169,11 +169,11 @@ func (c *Client) fetchBLEDeviceData(patientID, role string) (*types.CareLinkData
 
 	// Get patient ID if not provided
 	if patientID == "" && role == "patient" {
-		resp, err := c.makeRequest("GET", c.urls.Me, nil)
+		meResp, err := c.makeRequest("GET", c.urls.Me, nil)
 		if err == nil {
-			defer resp.Body.Close()
+			defer meResp.Body.Close()
 			var userInfo types.UserInfo
-			if json.NewDecoder(resp.Body).Decode(&userInfo) == nil {
+			if json.NewDecoder(meResp.Body).Decode(&userInfo) == nil {
 				patientID = userInfo.ID
 			}
 		}
@@ -419,7 +419,7 @@ func (c *Client) Fetch() (*types.CareLinkData, error) {
 		// Check if error is retryable
 		httpStatus := 0
 		if strings.Contains(err.Error(), "HTTP ") {
-			fmt.Sscanf(err.Error(), "%*s %d", &httpStatus)
+			_, _ = fmt.Sscanf(err.Error(), "%*s %d", &httpStatus)
 		}
 
 		isProxyError := httpStatus == 400 || httpStatus == 403 || httpStatus == 407 ||

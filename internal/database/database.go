@@ -1,9 +1,9 @@
 package database
 
 import (
-	"github.com/mrowling/carelink-go/internal/types"
 	"database/sql"
 	"fmt"
+	"github.com/mrowling/carelink-go/internal/types"
 	"log"
 	"time"
 

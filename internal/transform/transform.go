@@ -1,8 +1,8 @@
 package transform
 
 import (
-	"github.com/mrowling/carelink-go/internal/types"
 	"fmt"
+	"github.com/mrowling/carelink-go/internal/types"
 	"log"
 	"math"
 	"strings"

@@ -40,7 +40,11 @@ func LoadProxyList(filePath string) []Proxy {
 		log.Printf("[Proxy] Failed to open proxy file: %v", err)
 		return []Proxy{}
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("[Proxy] Failed to close proxy file: %v", closeErr)
+		}
+	}()
 
 	var proxies []Proxy
 	scanner := bufio.NewScanner(file)

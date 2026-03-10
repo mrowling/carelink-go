@@ -1,76 +1,132 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
-	"log"
-	"math"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/mrowling/carelink-go/internal/carelink"
 	"github.com/mrowling/carelink-go/internal/config"
 	"github.com/mrowling/carelink-go/internal/database"
+	"github.com/mrowling/carelink-go/internal/logger"
 	"github.com/mrowling/carelink-go/internal/paths"
-	"github.com/mrowling/carelink-go/internal/transform"
+	"github.com/mrowling/carelink-go/internal/poller"
+	"github.com/mrowling/carelink-go/internal/server"
 )
 
-// LatestResponse represents the output format for the latest subcommand
-type LatestResponse struct {
-	SGVMmol    float64 `json:"sgv_mmol"`
-	Direction  string  `json:"direction,omitempty"`
-	Trend      *int    `json:"trend,omitempty"`
-	AgeMinutes int     `json:"age_minutes"`
-}
-
-// ErrorResponse represents an error message in JSON format
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
 func main() {
-	// Check for subcommands
-	if len(os.Args) < 2 {
-		printError("No command specified")
+	// Initialize logger
+	logger.Init()
+
+	// Handle help command
+	if len(os.Args) > 1 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
 		printHelp()
-		os.Exit(1)
+		os.Exit(0)
 	}
 
-	switch os.Args[1] {
-	case "poll":
-		runBridge()
-	case "latest":
-		runLatest()
-	case "help", "--help", "-h":
-		printHelp()
-	default:
-		printError(fmt.Sprintf("Unknown command: %s", os.Args[1]))
-		printHelp()
-		os.Exit(1)
+	// Reject unknown commands
+	if len(os.Args) > 1 {
+		logger.Fatal("Main", "Unknown command: %s. Run 'carelink-go help' for usage.", os.Args[1])
 	}
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Fatal("Main", "Failed to load config: %v", err)
+	}
+
+	// Check logindata.json exists
+	if _, err := paths.FindFile("logindata.json"); err != nil {
+		logger.Fatal("Main", "No logindata.json found — see README for authentication setup")
+	}
+
+	// Create CareLink client
+	client, err := carelink.NewClient(cfg)
+	if err != nil {
+		logger.Fatal("Main", "Failed to create client: %v", err)
+	}
+
+	// Initialize database
+	dbPath := os.Getenv("CARELINK_DB_PATH")
+	if dbPath == "" {
+		dbPath, err = paths.GetDefaultDBPath()
+		if err != nil {
+			logger.Fatal("Main", "Failed to get default database path: %v", err)
+		}
+	}
+
+	db, err := database.New(dbPath)
+	if err != nil {
+		logger.Fatal("Main", "Failed to initialize database: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.Error("Main", "Failed to close database: %v", err)
+		}
+	}()
+	logger.Info("Main", "Database initialized at %s", dbPath)
+
+	// Create HTTP server
+	srv := server.New(db)
+
+	// Create poller with callback to update server's last fetch time
+	poll := poller.New(client, db, cfg, srv.UpdateLastFetch)
+
+	// Start polling in background
+	go poll.Start()
+
+	// Setup graceful shutdown
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
+
+	// Start HTTP server in separate goroutine
+	go func() {
+		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Fatal("Main", "HTTP server error: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	<-done
+	logger.Info("Main", "Received shutdown signal")
+
+	// Graceful shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error("Main", "Server shutdown error: %v", err)
+	}
+
+	logger.Info("Main", "Shutdown complete")
 }
 
-// printHelp displays usage information
 func printHelp() {
-	fmt.Println(`CareLink Go - Fetch and store glucose data from Medtronic CareLink
+	fmt.Println(`CareLink Go - Continuous glucose monitoring bridge with HTTP API
 
 Usage:
-  carelink-go poll     Run the bridge (fetch and output data continuously)
-  carelink-go latest   Output the most recent glucose reading from database
-  carelink-go help     Show this help message
+  carelink-go       Start the bridge (polls CareLink API + serves HTTP API)
+  carelink-go help  Show this help message
 
-Commands:
-  poll      Continuously fetch data from CareLink API and output to stdout
-            Fetches at configured interval (default: 300 seconds)
-            Saves all data to SQLite database
-
-  latest    Query the database for the most recent blood glucose reading
-            Output format: {"sgv_mmol": 12.3, "direction": "Flat", "trend": 4, "age_minutes": 5}
+HTTP Endpoints:
+  GET /latest       Returns the most recent glucose reading
+                    Response: {"sgv_mmol": 12.3, "direction": "Flat", "trend": 4, "age_minutes": 5}
+  
+  GET /health       Health check endpoint (for Kubernetes liveness/readiness probes)
+                    Returns 200 OK if system is healthy, 503 if data is stale
 
 Environment Variables:
-  CARELINK_CONFIG_DIR Path to config directory (default: ~/.carelink/config/)
-  CARELINK_DATA_DIR   Path to data directory (default: ~/.carelink/data/)
-  CARELINK_DB_PATH    Path to SQLite database (default: <data_dir>/carelink.db)
+  CARELINK_CONFIG_DIR              Config directory (default: ~/.carelink/config/)
+  CARELINK_DATA_DIR                Data directory (default: ~/.carelink/data/)
+  CARELINK_DB_PATH                 SQLite database path (default: <data_dir>/carelink.db)
+  CARELINK_PORT                    HTTP server port (default: 8080)
+  CARELINK_LOG_LEVEL               Logging level: DEBUG, INFO, WARN, ERROR (default: INFO)
+  CARELINK_HEALTH_CHECK_STALE_MINS Minutes before health check fails (default: 15)
 
 Configuration Files:
   Config directory (CARELINK_CONFIG_DIR or ~/.carelink/config/):
@@ -80,205 +136,20 @@ Configuration Files:
   
   Data directory (CARELINK_DATA_DIR or ~/.carelink/data/):
     carelink.db       SQLite database
-  
-  Files are searched in: current directory first, then config directory
 
 Examples:
-  ./carelink-go poll
-  ./carelink-go latest
-  ./carelink-go latest | jq '.sgv_mmol'`)
-}
+  # Start the server
+  ./carelink-go
 
-// printError outputs an error in JSON format to stderr
-func printError(message string) {
-	errResp := ErrorResponse{Error: message}
-	jsonData, _ := json.MarshalIndent(errResp, "", "  ")
-	fmt.Fprintln(os.Stderr, string(jsonData))
-}
+  # Query latest glucose reading
+  curl http://localhost:8080/latest
 
-// runLatest queries the database for the most recent glucose reading
-func runLatest() {
-	// Get database path from environment or use default
-	dbPath := os.Getenv("CARELINK_DB_PATH")
-	if dbPath == "" {
-		var err error
-		dbPath, err = paths.GetDefaultDBPath()
-		if err != nil {
-			printError(fmt.Sprintf("Failed to get default database path: %v", err))
-			os.Exit(1)
-		}
-	}
+  # Check health
+  curl http://localhost:8080/health
 
-	// Check if database exists
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		printError(fmt.Sprintf("Database not found at %s", dbPath))
-		os.Exit(1)
-	}
+  # Run on custom port
+  CARELINK_PORT=3000 ./carelink-go
 
-	// Open database
-	db, err := database.New(dbPath)
-	if err != nil {
-		printError(fmt.Sprintf("Failed to open database: %v", err))
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	// Get most recent entry
-	entries, err := db.GetRecentGlucoseEntries(1)
-	if err != nil {
-		printError(fmt.Sprintf("Failed to query database: %v", err))
-		os.Exit(1)
-	}
-
-	if len(entries) == 0 {
-		printError("No glucose entries found in database")
-		os.Exit(1)
-	}
-
-	entry := entries[0]
-
-	// Calculate age in minutes (rounded to nearest whole number)
-	entryTime := time.UnixMilli(entry.Date)
-	ageMinutes := int(math.Round(time.Since(entryTime).Minutes()))
-
-	// Map direction to trend number
-	directionToTrend := map[string]int{
-		"NONE":          0,
-		"TripleUp":      1,
-		"DoubleUp":      1,
-		"SingleUp":      2,
-		"FortyFiveUp":   3,
-		"Flat":          4,
-		"FortyFiveDown": 5,
-		"SingleDown":    6,
-		"DoubleDown":    7,
-		"TripleDown":    7,
-	}
-
-	// Build response
-	response := LatestResponse{
-		SGVMmol:    entry.SGVMmol,
-		AgeMinutes: ageMinutes,
-	}
-
-	// Add direction if available
-	if entry.Direction != "" {
-		response.Direction = entry.Direction
-
-		// Add trend if direction is mappable
-		if trend, ok := directionToTrend[entry.Direction]; ok {
-			response.Trend = &trend
-		}
-	}
-
-	// Output JSON
-	jsonData, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		printError(fmt.Sprintf("Failed to marshal JSON: %v", err))
-		os.Exit(1)
-	}
-
-	fmt.Println(string(jsonData))
-}
-
-// runBridge runs the main CareLink bridge loop
-func runBridge() {
-	// Load configuration
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("[Bridge] Failed to load config: %v", err)
-	}
-
-	// Check if logindata.json exists (will be found via paths.FindFile in auth.go)
-	_, err = paths.FindFile("logindata.json")
-	if err != nil {
-		log.Fatal("[Bridge] No logindata.json found — see README for authentication setup")
-	}
-
-	// Create CareLink client
-	client, err := carelink.NewClient(cfg)
-	if err != nil {
-		log.Fatalf("[Bridge] Failed to create client: %v", err)
-	}
-
-	// Initialize database
-	dbPath := os.Getenv("CARELINK_DB_PATH")
-	if dbPath == "" {
-		dbPath, err = paths.GetDefaultDBPath()
-		if err != nil {
-			log.Fatalf("[Bridge] Failed to get default database path: %v", err)
-		}
-	}
-	db, err := database.New(dbPath)
-	if err != nil {
-		log.Fatalf("[Bridge] Failed to initialize database: %v", err)
-	}
-	defer db.Close()
-	log.Printf("[Bridge] Database initialized at %s", dbPath)
-
-	// Create recency filters
-	sgvFilter := transform.NewRecencyFilter()
-	deviceStatusFilter := transform.NewRecencyFilter()
-
-	// Start loop
-	log.Printf("[Bridge] Starting — interval set to %ds", cfg.Interval)
-	log.Println("[Bridge] Mode: stdout-only (not uploading to Nightscout)")
-	log.Println("[Bridge] Fetching data now...")
-
-	for {
-		// Fetch data from CareLink
-		data, err := client.Fetch()
-		if err != nil {
-			log.Printf("[Bridge] Error: %v", err)
-			time.Sleep(time.Duration(cfg.Interval) * time.Second)
-			continue
-		}
-
-		// Check for empty data
-		if data.LastMedicalDeviceDataUpdateServerTime == 0 {
-			log.Println("[Bridge] Warning: received empty or invalid data from CareLink")
-			if cfg.Verbose {
-				jsonData, _ := json.Marshal(data)
-				log.Printf("[Bridge] Data: %s", string(jsonData))
-			}
-			time.Sleep(time.Duration(cfg.Interval) * time.Second)
-			continue
-		}
-
-		// Transform data
-		transformed := transform.Transform(data, cfg.SGVLimit)
-
-		// Filter to get only new entries
-		newSGVs := sgvFilter.FilterSGVs(transformed.Entries)
-		newDeviceStatus := deviceStatusFilter.FilterDeviceStatus(transformed.DeviceStatus)
-
-		// Save to database
-		if err := db.SaveSGVEntries(newSGVs); err != nil {
-			log.Printf("[Bridge] Error saving glucose entries to database: %v", err)
-		}
-		if err := db.SaveDeviceStatus(newDeviceStatus); err != nil {
-			log.Printf("[Bridge] Error saving device status to database: %v", err)
-		}
-
-		// Output JSON (always output on every fetch as requested)
-		output := map[string]interface{}{
-			"entries":      newSGVs,
-			"devicestatus": newDeviceStatus,
-		}
-
-		jsonOutput, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			log.Printf("[Bridge] Error marshaling JSON: %v", err)
-		} else {
-			fmt.Println(string(jsonOutput))
-		}
-
-		if cfg.Verbose {
-			nextCheck := time.Now().Add(time.Duration(cfg.Interval) * time.Second)
-			log.Printf("[Bridge] Next check in %ds (at %s)", cfg.Interval, nextCheck.Format(time.RFC3339))
-		}
-
-		// Sleep until next fetch
-		time.Sleep(time.Duration(cfg.Interval) * time.Second)
-	}
+  # Enable debug logging
+  CARELINK_LOG_LEVEL=DEBUG ./carelink-go`)
 }

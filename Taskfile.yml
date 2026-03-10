@@ -1,0 +1,249 @@
+version: '3'
+
+vars:
+  BINARY_NAME: carelink-go
+  BUILD_DIR: ./bin
+  MAIN_FILE: ./main.go
+  LDFLAGS: -s -w
+
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the application
+    cmds:
+      - go build -o {{.BINARY_NAME}} {{.MAIN_FILE}}
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BINARY_NAME}}"
+
+  build:optimized:
+    desc: Build the application with optimizations (smaller binary)
+    cmds:
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BINARY_NAME}} {{.MAIN_FILE}}
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BINARY_NAME}}"
+
+  build:all:
+    desc: Build for all major platforms
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_FILE}}
+      - GOOS=linux GOARCH=arm64 go build -ldflags="{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_FILE}}
+      - GOOS=darwin GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_FILE}}
+      - GOOS=darwin GOARCH=arm64 go build -ldflags="{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_FILE}}
+      - GOOS=windows GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_FILE}}
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+
+  run:
+    desc: Build and run the application
+    deps: [build]
+    cmds:
+      - ./{{.BINARY_NAME}}
+
+  dev:
+    desc: Run the application in development mode with verbose logging
+    deps: [build]
+    cmds:
+      - CARELINK_LOG_LEVEL=DEBUG ./{{.BINARY_NAME}}
+
+  install:
+    desc: Install the binary to $GOPATH/bin
+    cmds:
+      - go install {{.MAIN_FILE}}
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+      - rm -rf {{.BUILD_DIR}}
+      - go clean
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v ./...
+
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo 'Coverage report generated at coverage.html'
+
+  test:race:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race -v ./...
+
+  lint:
+    desc: Run golangci-lint (requires golangci-lint to be installed)
+    cmds:
+      - golangci-lint run ./...
+
+  lint:install:
+    desc: Install golangci-lint
+    cmds:
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+  fmt:
+    desc: Format all Go files
+    cmds:
+      - go fmt ./...
+
+  fmt:check:
+    desc: Check if all Go files are formatted
+    cmds:
+      - |
+        if [ -n "$(gofmt -l .)" ]; then
+          echo 'The following files are not formatted:'
+          gofmt -l .
+          exit 1
+        fi
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  mod:tidy:
+    desc: Tidy go.mod and go.sum
+    cmds:
+      - go mod tidy
+
+  mod:download:
+    desc: Download all dependencies
+    cmds:
+      - go mod download
+
+  mod:verify:
+    desc: Verify dependencies
+    cmds:
+      - go mod verify
+
+  deps:update:
+    desc: Update all dependencies
+    cmds:
+      - go get -u ./...
+      - go mod tidy
+
+  setup:
+    desc: Setup development environment
+    cmds:
+      - task: mod:download
+      - task: lint:install
+      - mkdir -p ~/.carelink/config ~/.carelink/data
+      - |
+        if [ ! -f .env ]; then
+          cp .env.example .env
+          echo 'Created .env file from .env.example'
+        fi
+      - echo 'Development environment setup complete!'
+
+  check:
+    desc: Run all checks (fmt, vet, lint, test)
+    cmds:
+      - task: fmt:check
+      - task: vet
+      - task: lint
+      - task: test
+
+  docker:build:
+    desc: Build Docker image locally
+    cmds:
+      - docker build -t {{.BINARY_NAME}}:latest .
+      - docker tag {{.BINARY_NAME}}:latest ghcr.io/mrowling/{{.BINARY_NAME}}:latest
+
+  docker:build:multiarch:
+    desc: Build multi-architecture Docker image
+    cmds:
+      - docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/mrowling/{{.BINARY_NAME}}:latest .
+
+  docker:run:
+    desc: Run Docker container from GHCR
+    cmds:
+      - |
+        docker run -d \
+          --name {{.BINARY_NAME}} \
+          -p 8080:8080 \
+          -v $HOME/.carelink/config:/config \
+          -v $HOME/.carelink/data:/data \
+          -e CARELINK_CONFIG_DIR=/config \
+          -e CARELINK_DATA_DIR=/data \
+          ghcr.io/mrowling/{{.BINARY_NAME}}:latest
+
+  docker:run:local:
+    desc: Run Docker container from local build
+    cmds:
+      - |
+        docker run -d \
+          --name {{.BINARY_NAME}} \
+          -p 8080:8080 \
+          -v $HOME/.carelink/config:/config \
+          -v $HOME/.carelink/data:/data \
+          -e CARELINK_CONFIG_DIR=/config \
+          -e CARELINK_DATA_DIR=/data \
+          {{.BINARY_NAME}}:latest
+
+  docker:pull:
+    desc: Pull latest Docker image from GHCR
+    cmds:
+      - docker pull ghcr.io/mrowling/{{.BINARY_NAME}}:latest
+
+  docker:stop:
+    desc: Stop and remove Docker container
+    cmds:
+      - docker stop {{.BINARY_NAME}} || true
+      - docker rm {{.BINARY_NAME}} || true
+
+  db:query:
+    desc: Open SQLite database in interactive mode
+    cmds:
+      - sqlite3 ~/.carelink/data/carelink.db
+
+  db:recent:
+    desc: Show recent glucose readings
+    cmds:
+      - sqlite3 ~/.carelink/data/carelink.db "SELECT datetime(date/1000, 'unixepoch') as time, sgv, sgv_mmol, direction FROM glucose_entries ORDER BY date DESC LIMIT 20;"
+
+  db:export:
+    desc: Export database to CSV
+    cmds:
+      - sqlite3 -header -csv ~/.carelink/data/carelink.db "SELECT * FROM glucose_entries;" > glucose_export.csv
+      - echo 'Exported to glucose_export.csv'
+
+  health:
+    desc: Check application health endpoint
+    cmds:
+      - curl -s http://localhost:8080/health | jq .
+
+  latest:
+    desc: Get latest glucose reading from API
+    cmds:
+      - curl -s http://localhost:8080/latest | jq .
+
+  release:
+    desc: Create a release build for all platforms
+    cmds:
+      - task: check
+      - task: build:all
+      - echo 'Release builds created in {{.BUILD_DIR}}/'
+
+  version:
+    desc: Show Go version
+    cmds:
+      - go version

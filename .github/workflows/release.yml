@@ -1,0 +1,157 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          
+          # Build for all platforms
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+          
+          for platform in "${platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            output="dist/carelink-go-${os}-${arch}"
+            
+            if [ "$os" == "windows" ]; then
+              output="${output}.exe"
+            fi
+            
+            echo "Building for $os/$arch..."
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build \
+              -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" \
+              -o "$output" \
+              .
+            
+            # Create archives
+            if [ "$os" == "windows" ]; then
+              zip -j "dist/carelink-go-${os}-${arch}.zip" "$output"
+              rm "$output"
+            else
+              tar czf "dist/carelink-go-${os}-${arch}.tar.gz" -C dist "$(basename $output)"
+              rm "$output"
+            fi
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            echo "## Changes" > changelog.md
+            echo "" >> changelog.md
+            echo "Initial release" >> changelog.md
+          else
+            echo "## Changes since $PREV_TAG" > changelog.md
+            echo "" >> changelog.md
+            git log --pretty=format:"* %s (%h)" $PREV_TAG..HEAD >> changelog.md
+          fi
+          
+          echo "" >> changelog.md
+          echo "" >> changelog.md
+          echo "## Installation" >> changelog.md
+          echo "" >> changelog.md
+          echo "### Docker" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "docker pull ghcr.io/mrowling/carelink-go:${{ steps.version.outputs.version }}" >> changelog.md
+          echo '```' >> changelog.md
+          echo "" >> changelog.md
+          echo "### Binary" >> changelog.md
+          echo "Download the appropriate binary for your platform from the assets below." >> changelog.md
+          echo "" >> changelog.md
+          echo "#### Linux (amd64)" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "curl -LO https://github.com/mrowling/carelink-go/releases/download/${{ steps.version.outputs.version }}/carelink-go-linux-amd64.tar.gz" >> changelog.md
+          echo "tar xzf carelink-go-linux-amd64.tar.gz" >> changelog.md
+          echo "chmod +x carelink-go-linux-amd64" >> changelog.md
+          echo "sudo mv carelink-go-linux-amd64 /usr/local/bin/carelink-go" >> changelog.md
+          echo '```' >> changelog.md
+          echo "" >> changelog.md
+          echo "#### macOS (Apple Silicon)" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "curl -LO https://github.com/mrowling/carelink-go/releases/download/${{ steps.version.outputs.version }}/carelink-go-darwin-arm64.tar.gz" >> changelog.md
+          echo "tar xzf carelink-go-darwin-arm64.tar.gz" >> changelog.md
+          echo "chmod +x carelink-go-darwin-arm64" >> changelog.md
+          echo "sudo mv carelink-go-darwin-arm64 /usr/local/bin/carelink-go" >> changelog.md
+          echo '```' >> changelog.md
+          
+          cat changelog.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: changelog.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate release summary
+        run: |
+          echo "### Release Published :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux (amd64, arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS (amd64, arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Windows (amd64)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Image:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/mrowling/carelink-go:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

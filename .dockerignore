@@ -1,0 +1,52 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# GitHub
+.github
+
+# Documentation
+*.md
+LICENSE
+CONTRIBUTING.md
+
+# Task files
+Taskfile.yml
+TASKS.md
+.task
+
+# Build artifacts
+carelink-go
+bin/
+dist/
+*.exe
+*.tar.gz
+*.zip
+
+# Test files
+*_test.go
+coverage.out
+coverage.html
+
+# Local config and data
+.env
+my.env
+config/
+data/
+logindata.json
+https.txt
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

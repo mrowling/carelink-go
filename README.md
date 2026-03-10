@@ -110,9 +110,9 @@ CareLink Go requires initial authentication using the Node.js version of carelin
 
 **One-time setup:**
 
-1. Clone and setup the original repository:
+1. Clone and setup the carelini-bridge repository:
    ```bash
-   git clone https://github.com/domien-f/carelink-bridge.git
+   git clone https://github.com/mrowling/carelink-bridge.git
    cd carelink-bridge
    npm install
    ```

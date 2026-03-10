@@ -49,8 +49,8 @@ jobs:
             type=semver,pattern={{major}}
             # Tag with full version including 'v' prefix
             type=semver,pattern=v{{version}}
-            # Tag with git SHA for traceability
-            type=sha,prefix={{branch}}-
+            # Tag with git SHA for branch builds only
+            type=sha,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=CareLink Go
             org.opencontainers.image.description=Standalone Go implementation of CareLink bridge for Medtronic pump and CGM data

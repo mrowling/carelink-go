@@ -58,8 +58,8 @@ CareLink Go requires initial authentication using the Node.js version of carelin
    npm run login
    ```
 
-3. Copy the generated `logindata.json` to one of these locations:
-   - `~/.carelink/logindata.json` **(recommended)**
+3. Copy the generated `logindata.json` to the config directory:
+   - `~/.carelink/config/logindata.json` **(recommended)**
    - Same directory as the carelink-go binary
 
 **After initial setup:**
@@ -68,13 +68,31 @@ CareLink Go will automatically refresh tokens, so you only need to do this once.
 
 ## Configuration
 
+### Directory Structure
+
+CareLink Go uses separate directories for configuration and data:
+
+**Config directory** (default: `~/.carelink/config/`):
+- `.env` - Main configuration
+- `my.env` - Optional overrides
+- `logindata.json` - OAuth tokens
+- `https.txt` - Proxy list (optional)
+
+**Data directory** (default: `~/.carelink/data/`):
+- `carelink.db` - SQLite database
+
+This separation allows independent mounting in containerized environments (Docker, Kubernetes).
+
 ### Environment Variables
 
-Create a `.env` file in one of these locations (checked in order):
-1. Same directory as the binary
-2. `~/.carelink/` **(recommended)**
+**Directory Configuration:**
+```env
+CARELINK_CONFIG_DIR=/path/to/config  # Default: ~/.carelink/config
+CARELINK_DATA_DIR=/path/to/data      # Default: ~/.carelink/data
+CARELINK_DB_PATH=/custom/db.db       # Overrides data_dir/carelink.db
+```
 
-**Example `.env`:**
+**Application Configuration (.env file):**
 
 ```env
 CARELINK_USERNAME=your_username
@@ -88,21 +106,58 @@ CARELINK_VERBOSE=false
 USE_PROXY=false
 ```
 
-### Configuration File Locations
+Place `.env` in one of these locations (checked in order):
+1. Same directory as the binary
+2. Config directory (`~/.carelink/config/` or `CARELINK_CONFIG_DIR`)
 
-All configuration files are searched in this order:
-1. Current directory
-2. `~/.carelink/`
+### Kubernetes / Docker Configuration
 
-Files include:
-- `.env` - Main configuration
-- `my.env` - Optional overrides (loaded after .env)
-- `logindata.json` - OAuth tokens
-- `https.txt` - Proxy list (if USE_PROXY=true)
+For containerized deployments, mount directories separately:
+**Kubernetes Example:**
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: carelink-go
+spec:
+  containers:
+  - name: carelink
+    image: carelink-go:latest
+    env:
+    - name: CARELINK_CONFIG_DIR
+      value: /config
+    - name: CARELINK_DATA_DIR
+      value: /data
+    volumeMounts:
+    - name: config
+      mountPath: /config
+      readOnly: true
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: config
+    configMap:
+      name: carelink-config  # Contains .env, logindata.json
+  - name: data
+    persistentVolumeClaim:
+      claimName: carelink-data  # Persistent storage for database
+```
+
+**Docker Example:**
+
+```bash
+docker run -d \
+  -e CARELINK_CONFIG_DIR=/config \
+  -e CARELINK_DATA_DIR=/data \
+  -v /host/config:/config:ro \
+  -v /host/data:/data \
+  carelink-go:latest poll
+```
 
 ### Database Location
 
-By default, the SQLite database is stored at `~/.carelink/carelink.db`.
+Default: `~/.carelink/data/carelink.db`
 
 Override with environment variable:
 ```bash
@@ -186,26 +241,27 @@ Continuously fetches data from CareLink API at the configured interval (default:
 
 ## SQLite Database
 
-Default location: `~/.carelink/carelink.db`
+Default location: `~/.carelink/data/carelink.db`
 
 ### Querying
 
 ```bash
 # Recent readings
-sqlite3 ~/.carelink/carelink.db "SELECT date_string, sgv, sgv_mmol, direction FROM glucose_entries ORDER BY date DESC LIMIT 10;"
+sqlite3 ~/.carelink/data/carelink.db "SELECT date_string, sgv, sgv_mmol, direction FROM glucose_entries ORDER BY date DESC LIMIT 10;"
 
 # Export to CSV
-sqlite3 -header -csv ~/.carelink/carelink.db "SELECT * FROM glucose_entries;" > glucose_export.csv
+sqlite3 -header -csv ~/.carelink/data/carelink.db "SELECT * FROM glucose_entries;" > glucose_export.csv
 ```
 
 ## Proxy Support
 
 1. Set `USE_PROXY=true` in `.env`
-2. Create `https.txt` with one proxy per line:
+2. Create `https.txt` in config directory with one proxy per line:
    ```
    ip:port
    ip:port:username:password
    ```
+3. Place in `~/.carelink/config/https.txt` or current directory
 
 ## Troubleshooting
 
@@ -219,7 +275,7 @@ Re-authenticate:
 ```bash
 cd carelink-bridge  # Node.js version
 npm run login
-cp logindata.json ~/.carelink/
+cp logindata.json ~/.carelink/config/
 ```
 
 ### "Database not found"

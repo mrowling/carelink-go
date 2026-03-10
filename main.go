@@ -68,12 +68,20 @@ Commands:
             Output format: {"sgv_mmol": 12.3, "direction": "Flat", "trend": 4, "age_minutes": 5}
 
 Environment Variables:
-  CARELINK_DB_PATH    Path to SQLite database (default: ~/.carelink/carelink.db)
+  CARELINK_CONFIG_DIR Path to config directory (default: ~/.carelink/config/)
+  CARELINK_DATA_DIR   Path to data directory (default: ~/.carelink/data/)
+  CARELINK_DB_PATH    Path to SQLite database (default: <data_dir>/carelink.db)
 
 Configuration Files:
-  .env, my.env        Searched in: current directory, then ~/.carelink/
-  logindata.json      Searched in: current directory, then ~/.carelink/
-  https.txt           Searched in: current directory, then ~/.carelink/
+  Config directory (CARELINK_CONFIG_DIR or ~/.carelink/config/):
+    .env, my.env      Environment configuration
+    logindata.json    OAuth tokens
+    https.txt         Proxy list (optional)
+  
+  Data directory (CARELINK_DATA_DIR or ~/.carelink/data/):
+    carelink.db       SQLite database
+  
+  Files are searched in: current directory first, then config directory
 
 Examples:
   ./carelink-go poll
